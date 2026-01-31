@@ -12,3 +12,11 @@ loss_type: elbo  # elbo, low_var
 # Options: 'elbo' (standard), 'simple' (best), 'fm', 'sigmoid', 'edm', 'iddpm'
 loss_weighting: elbo
 sigmoid_k: 0.0  # Parameter k for sigmoid weighting (only used when loss_weighting=sigmoid)
+
+# Frequency-informed loss reweighting
+freq_weighting: false
+token_freqs_path: null  # Path to .npy/.pt vector of token frequencies
+freq_eps: 1e-8
+freq_inv_max: 1e6
+freq_p_max: 0.0
+freq_p_schedule: linear  # linear | constant

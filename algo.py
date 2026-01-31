@@ -372,7 +372,96 @@ class DUO_BASE(trainer_base.UniformState):
     # Get loss weighting scheme from config (default: 'elbo' for standard ELBO)
     self.loss_weighting = getattr(config.algo, 'loss_weighting', 'elbo')
     self.sigmoid_k = getattr(config.algo, 'sigmoid_k', 0.0)
+    self.freq_weighting = getattr(config.algo, 'freq_weighting', False)
+    self.token_freqs_path = getattr(config.algo, 'token_freqs_path', None)
+    self.freq_eps = getattr(config.algo, 'freq_eps', 1e-8)
+    self.freq_inv_max = getattr(config.algo, 'freq_inv_max', 1e6)
+    self.freq_p_max = getattr(config.algo, 'freq_p_max', 0.0)
+    self.freq_p_schedule = getattr(
+      config.algo, 'freq_p_schedule', 'linear')
+    if self.freq_weighting:
+      self._load_token_frequencies()
     self._validate_configuration()
+
+  def _load_token_frequencies(self):
+    if self.token_freqs_path is None:
+      raise ValueError(
+        'Frequency weighting is enabled but '
+        'algo.token_freqs_path is not set.')
+    with fsspec.open(self.token_freqs_path, 'rb') as f:
+      if self.token_freqs_path.endswith('.pt') or (
+          self.token_freqs_path.endswith('.pth')):
+        freqs = torch.load(f, map_location='cpu')
+      else:
+        freqs = np.load(f)
+    if isinstance(freqs, dict):
+      freqs = freqs.get('freqs', freqs.get('freq', freqs))
+    freqs = torch.as_tensor(freqs, dtype=torch.float32)
+    if freqs.ndim != 1 or freqs.shape[0] != self.vocab_size:
+      raise ValueError(
+        'Token frequency vector must be 1D with '
+        f'length {self.vocab_size}, got {freqs.shape}.')
+    freqs = torch.clamp(freqs, min=self.freq_eps)
+    freqs = freqs / freqs.sum()
+    inv_freqs = torch.clamp(1.0 / freqs, 1.0, self.freq_inv_max)
+    self.register_buffer('token_freqs', freqs)
+    self.register_buffer('token_inv_freqs', inv_freqs)
+
+  def _freq_weight_p(self):
+    if self.freq_p_max <= 0:
+      return 0.0
+    total_steps = None
+    if getattr(self, 'trainer', None) is not None:
+      total_steps = getattr(self.trainer, 'max_steps', None)
+    if not total_steps:
+      total_steps = getattr(self.config.trainer, 'max_steps', 0)
+    if not total_steps:
+      return float(self.freq_p_max)
+    progress = min(self.global_step / total_steps, 1.0)
+    if self.freq_p_schedule == 'linear':
+      return float(self.freq_p_max) * progress
+    if self.freq_p_schedule == 'constant':
+      return float(self.freq_p_max)
+    raise ValueError(
+      f'Unknown freq_p_schedule: {self.freq_p_schedule}. '
+      'Choose from: linear, constant')
+
+  def _token_freq_weights(self, x0):
+    p = self._freq_weight_p()
+    if p <= 0:
+      return torch.ones_like(x0, dtype=torch.float32)
+    weights = self.token_inv_freqs.pow(p)
+    weights = weights / weights.mean()
+    return weights[x0]
+
+  def _loss(self, x0, valid_tokens,
+            current_accumulation_step=None,
+            train_mode=False):
+    (input_tokens, output_tokens,
+     valid_tokens) = self._process_model_input(
+       x0, valid_tokens)
+    loss = self.nll(input_tokens, output_tokens,
+                    current_accumulation_step, train_mode)
+    assert loss.ndim == 2
+    if self.ignore_bos:
+      loss[:, 1:] = loss[:, 1:]
+      valid_tokens[:, 1:] = valid_tokens[:, 1:]
+
+    if self.training and self.freq_weighting:
+      token_weights = self._token_freq_weights(input_tokens)
+      weighted_loss = loss * token_weights
+      nlls = (weighted_loss * valid_tokens).sum()
+      num_tokens = (token_weights * valid_tokens).sum()
+      token_nll = nlls / num_tokens
+    else:
+      nlls = (loss * valid_tokens).sum()
+      num_tokens = valid_tokens.sum()
+      token_nll = nlls / num_tokens
+
+    return trainer_base.Loss(loss=token_nll,
+                             nlls=nlls,
+                             prior_loss=0.0,
+                             num_tokens=num_tokens)
 
   def on_save_checkpoint(self, checkpoint):
     checkpoint['state_dict'] = collections.OrderedDict(
