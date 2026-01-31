@@ -14,6 +14,15 @@ if REPO_ROOT not in sys.path:
 import dataloader
 import utils
 
+omegaconf.OmegaConf.register_new_resolver(
+  'cwd', os.getcwd)
+omegaconf.OmegaConf.register_new_resolver(
+  'device_count', torch.cuda.device_count)
+omegaconf.OmegaConf.register_new_resolver(
+  'eval', eval)
+omegaconf.OmegaConf.register_new_resolver(
+  'div_up', lambda x, y: (x + y - 1) // y)
+
 
 def _iter_input_ids(dataset):
   for item in dataset:
