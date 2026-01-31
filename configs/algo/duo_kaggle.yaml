@@ -18,11 +18,3 @@ gamma_max: -1.75
 
 loss_weighting: fm
 sigmoid_k: 0.0  # Parameter k for sigmoid weighting (only used when loss_weighting=sigmoid)
-
-# Frequency-informed loss reweighting
-freq_weighting: true
-token_freqs_path: /kaggle/working/token_freqs.npy
-freq_eps: 1e-8
-freq_inv_max: 1e6
-freq_p_max: 0.2
-freq_p_schedule: linear  # linear | constant
