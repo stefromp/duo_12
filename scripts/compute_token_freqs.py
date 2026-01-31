@@ -1,9 +1,15 @@
 import os
+import sys
 
 import hydra
 import numpy as np
 import omegaconf
 import torch
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+if REPO_ROOT not in sys.path:
+  sys.path.insert(0, REPO_ROOT)
 
 import dataloader
 import utils
